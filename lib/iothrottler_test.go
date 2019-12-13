@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+const (
+	defaultRate  = 100 * 1024
+	defaultBurst = 100 * 1024
+)
+
 func assertNil(i interface{}, t *testing.T) {
 	if i != nil {
 		if t != nil {
@@ -195,6 +200,45 @@ func TestBasicOps(t *testing.T) {
 		t.Fatalf("Expected to read %v but got %v", 0, n)
 	}
 	assertNotNil(err, t)
+}
+
+func TestBandwidthBasicOps(t *testing.T) {
+	pool, err := NewBandwidthThrottlerPool(1, defaultBurst)
+	assertNotNil(err, t)
+	assertNil(pool, t)
+
+	pool, err = NewBandwidthThrottlerPool(defaultRate, 1)
+	assertNotNil(err, t)
+	assertNil(pool, t)
+
+	pool, err = NewBandwidthThrottlerPool(defaultRate, defaultBurst)
+	assertNil(err, t)
+	assertNotNil(pool, t)
+
+	ids := pool.GetIDs()
+	if len(ids) != 0 {
+		t.Fatalf("Expecting %v to be not got %v.", 0, len(ids))
+	}
+
+	test := []byte("test")
+	rc := ioutil.NopCloser(bytes.NewReader(test))
+	reader, err := pool.NewBandwidthThrottledReadCloser(rc, 1, defaultBurst, "reader")
+	assertNotNil(err, t)
+	assertNil(reader, t)
+	reader, err = pool.NewBandwidthThrottledReadCloser(rc, defaultRate, defaultBurst, "reader")
+	assertNil(err, t)
+	assertNotNil(reader, t)
+
+	ids = pool.GetIDs()
+	if len(ids) != 1 {
+		t.Fatalf("Expecting %v to be not got %v.", 1, len(ids))
+	}
+	reader.Close()
+	ids = pool.GetIDs()
+	if len(ids) != 0 {
+		t.Fatalf("Expecting %v to be not got %v.", 0, len(ids))
+	}
+
 }
 
 func elapsedSeconds(t time.Time) int64 {

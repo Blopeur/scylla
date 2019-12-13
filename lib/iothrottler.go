@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"golang.org/x/time/rate"
 	"io"
+	"math"
 	"sync"
 	"time"
 )
@@ -32,6 +33,17 @@ type IOThrottlerPool interface {
 	SetLimitByID(r rate.Limit, b int, id string) error
 	SetLimitForAll(r rate.Limit, b int)
 	NewThrottledReadCloser(reader io.ReadCloser, r rate.Limit, b int, id string) io.ReadCloser
+	NewBandwidthThrottledReadCloser(reader io.ReadCloser, bandwidth int64, b int, id string) (io.ReadCloser, error)
+}
+
+func NewBandwidthThrottlerPool(bandwidth int64, burstSize int) (IOThrottlerPool, error) {
+	if bandwidth < 1024 {
+		return nil, fmt.Errorf("bandwith needs to be at least 1KB")
+	}
+	if burstSize < 1024 {
+		return nil, fmt.Errorf("buffer needs to be at least 1KB")
+	}
+	return NewIOThrottlerPool(rate.Every(convertBandwidthToLimit(bandwidth)), burstSize), nil
 }
 
 func NewIOThrottlerPool(r rate.Limit, b int) IOThrottlerPool {
@@ -41,6 +53,11 @@ func NewIOThrottlerPool(r rate.Limit, b int) IOThrottlerPool {
 		mu:            &sync.RWMutex{},
 	}
 	return i
+}
+
+func convertBandwidthToLimit(bandwidth int64) time.Duration {
+	//we use 1KB block chunck instead of 1 B for calculating events as we use 1KB buffer
+	return time.Duration(1000000000 / math.Ceil(float64(bandwidth/1024)))
 }
 
 func (p *ioThrottlerPool) GetGlobalLimit() (r rate.Limit, b int) {
@@ -94,6 +111,13 @@ func (p *ioThrottlerPool) SetLimitByID(r rate.Limit, b int, id string) error {
 	l.limiter.SetBurst(b)
 	l.limiter.SetLimit(r)
 	return nil
+}
+
+func (p *ioThrottlerPool) NewBandwidthThrottledReadCloser(reader io.ReadCloser, bandwidth int64, b int, id string) (io.ReadCloser, error) {
+	if bandwidth < 1024 {
+		return nil, fmt.Errorf("bandwith needs to be at least 1KB")
+	}
+	return p.NewThrottledReadCloser(reader, rate.Every(convertBandwidthToLimit(bandwidth)), b, id), nil
 }
 
 func (p *ioThrottlerPool) NewThrottledReadCloser(reader io.ReadCloser, r rate.Limit, b int, id string) io.ReadCloser {

@@ -1,4 +1,4 @@
-package lib
+package server
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	throttle "tcpThrottling/lib"
 )
 
 const (
@@ -17,7 +18,7 @@ const (
 type fileServer struct {
 	address string
 	logPath string
-	pool    IOThrottlerPool
+	pool    throttle.IOThrottlerPool
 }
 
 type FileServer interface {
@@ -39,18 +40,26 @@ func (f *fileServer) SetConnectionsLimit(r rate.Limit, b int) {
 	f.pool.SetLimitForAll(r, b)
 }
 
-func NewFileServer(address string, logPath string) FileServer {
+func NewFileServer(address string, logPath string, bandwidth int64) FileServer {
+	pool, err := throttle.NewBandwidthThrottlerPool(bandwidth, defaultBurst)
+	if err != nil {
+		log.Fatal("can't create dest file", err)
+		return nil
+	}
 	return &fileServer{
 		address: address,
 		logPath: logPath,
-		pool:    NewIOThrottlerPool(defaultRate, defaultBurst),
+		pool:    pool,
 	}
 }
 
 func (f *fileServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	buff := f.pool.NewThrottledReadCloser(conn, defaultRate, defaultBurst, conn.RemoteAddr().String())
-
+	buff, err := f.pool.NewBandwidthThrottledReadCloser(conn, defaultRate, defaultBurst, conn.RemoteAddr().String())
+	if err != nil {
+		log.Fatal("can't create readBuffer", err)
+		return
+	}
 	// we use naively the client address as log address in this case, solely for the purpose of the exercise
 	clientAddr := conn.RemoteAddr().String()
 	fo, err := os.Create(fmt.Sprintf("%s/%s.log", f.logPath, clientAddr))
