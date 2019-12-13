@@ -16,9 +16,10 @@ const (
 )
 
 type fileServer struct {
-	address string
-	logPath string
-	pool    throttle.IOThrottlerPool
+	address   string
+	logPath   string
+	poolRead  throttle.IOThrottlerPool
+	poolWrite throttle.IOThrottlerPool
 }
 
 // FileServer provide the basic fileserver interface
@@ -45,27 +46,29 @@ func (f *fileServer) SetConnectionsLimit(r rate.Limit, b int) {
 }
 
 // NewFileServer return a new file server
-func NewFileServer(address string, logPath string, bandwidth int64) FileServer {
-	pool, err := throttle.NewBandwidthThrottlerPool(bandwidth, defaultBurst)
+func NewFileServer(address string, logPath string, bandwidthRead, bandwidthWrite int64) FileServer {
+	poolRead, err := throttle.NewBandwidthThrottlerPool(bandwidthRead, defaultBurst)
+	if err != nil {
+		log.Fatal("can't create dest file", err)
+		return nil
+	}
+	poolWrite, err := throttle.NewBandwidthThrottlerPool(bandwidthWrite, defaultBurst)
 	if err != nil {
 		log.Fatal("can't create dest file", err)
 		return nil
 	}
 	return &fileServer{
-		address: address,
-		logPath: logPath,
-		pool:    pool,
+		address:   address,
+		logPath:   logPath,
+		poolRead:  poolRead,
+		poolWrite: poolWrite,
 	}
 }
 
 // handleConnection will simply take the connection and pipe the data to a file using the client address as file name
 func (f *fileServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	buff, err := f.pool.NewBandwidthThrottledReadCloser(conn, defaultRate, defaultBurst, conn.RemoteAddr().String())
-	if err != nil {
-		log.Fatal("can't create readBuffer", err)
-		return
-	}
+	buff := throttle.NewThrottledThrottledConn(f.poolRead, f.poolWrite, conn, defaultRate, defaultBurst, defaultRate, defaultBurst)
 	// we use naively the client address as log address in this case, solely for the purpose of the exercise
 	clientAddr := conn.RemoteAddr().String()
 	fo, err := os.Create(fmt.Sprintf("%s/%s.log", f.logPath, clientAddr))

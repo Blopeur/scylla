@@ -228,10 +228,8 @@ func TestBandwidthBasicOps(t *testing.T) {
 	rc := ioutil.NopCloser(bytes.NewReader(test))
 	reader, err := pool.NewBandwidthThrottledReadCloser(rc, 1, defaultBurst, "reader")
 	assertNotNil(err, t)
-	assertNil(reader, t)
 	reader, err = pool.NewBandwidthThrottledReadCloser(rc, defaultRate, defaultBurst, "reader")
 	assertNil(err, t)
-	assertNotNil(reader, t)
 
 	ids = pool.GetIDs()
 	if len(ids) != 1 {
