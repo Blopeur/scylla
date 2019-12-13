@@ -337,11 +337,11 @@ func (r *ThrottledWriteCloser) Write(buf []byte) (int, error) {
 	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
 	if b < len(buf) {
 		tmp := make([]byte, b)
+		copy(buf[:b], tmp)
 		n, err := r.origWriteCloser.Write(tmp)
 		if n <= 0 {
 			return n, err
 		}
-		copy(buf[:n], tmp)
 		return n, err
 	}
 	n, err := r.origWriteCloser.Write(buf)

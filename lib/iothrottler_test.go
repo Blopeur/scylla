@@ -2,7 +2,6 @@ package lib
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"golang.org/x/time/rate"
 	"io"
@@ -193,16 +192,76 @@ func TestBasicOps(t *testing.T) {
 	if ids[0] != server.RemoteAddr().String() {
 		t.Fatalf("Expecting %v to be not got %v", server.RemoteAddr().String(), ids[0])
 	}
+	wtcp := pool.NewThrottledWriteCloser(client, defaultRate, defaultBurst, "bla")
+	ids = pool.GetIDs()
+	if len(ids) != 2 {
+		t.Fatalf("Expecting %v to be not got %v", 2, len(ids))
+	}
 	rtcp.Close()
 	ids = pool.GetIDs()
-	if len(ids) != 0 {
-		t.Fatalf("Expecting %v to be not got %v", 0, len(ids))
+	if len(ids) != 1 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
 	}
 	n, err = rtcp.Read(test)
 	if n != 0 {
 		t.Fatalf("Expected to read %v but got %v", 0, n)
 	}
 	assertNotNil(err, t)
+	wtcp.Close()
+	ids = pool.GetIDs()
+	if len(ids) != 0 {
+		t.Fatalf("Expecting %v to be not got %v", 0, len(ids))
+	}
+
+	pool2 := NewIOThrottlerPool(defaultRate, defaultBurst)
+	assertNotNil(pool2, t)
+	client, server = createTcpPipe(t)
+	defer client.Close()
+	defer server.Close()
+	// create readwritecloser and close it
+
+	rw := NewThrottledReadWriteCloser(pool, pool2, client, defaultRate, defaultBurst, defaultRate, defaultBurst, "rw")
+	ids = pool.GetIDs()
+	if len(ids) != 1 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
+	ids = pool2.GetIDs()
+	if len(ids) != 1 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
+	rw.Close()
+	ids = pool.GetIDs()
+	if len(ids) != 0 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
+	ids = pool2.GetIDs()
+	if len(ids) != 0 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
+
+	// create net.conn throttled
+	client, server = createTcpPipe(t)
+	defer client.Close()
+	defer server.Close()
+
+	c := NewThrottledThrottledConn(pool, pool2, client, defaultRate, defaultBurst, defaultRate, defaultBurst)
+	ids = pool.GetIDs()
+	if len(ids) != 1 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
+	ids = pool2.GetIDs()
+	if len(ids) != 1 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
+	c.Close()
+	ids = pool.GetIDs()
+	if len(ids) != 0 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
+	ids = pool2.GetIDs()
+	if len(ids) != 0 {
+		t.Fatalf("Expecting %v to be not got %v", 1, len(ids))
+	}
 }
 
 // TestBandwidthBasicOps test the reader throttling basic ops without stress test
@@ -252,12 +311,20 @@ func timeTransfer(data []byte, reader io.Reader, writer io.Writer) (int64, error
 	serverError := make(chan error)
 	// Write the data
 	go func() {
-		count, err := writer.Write(data)
-		if count < len(data) {
-			serverError <- errors.New("Didn't write full bytes")
-		} else {
-			serverError <- err
+		d := data
+		count := 0
+		l := len(d)
+		for count < l {
+			c, err := writer.Write(d)
+			if err != nil {
+				serverError <- err
+				return
+			}
+			count += c
+			d = d[c:]
 		}
+		serverError <- nil
+		return
 	}()
 
 	buffer := make([]byte, len(data))
@@ -282,8 +349,8 @@ func timeTransfer(data []byte, reader io.Reader, writer io.Writer) (int64, error
 	return elapsed, returnErr
 }
 
-// TestThrottlingGlobal make sure that the pool level throttling override the reader level throttling
-func TestThrottlingGlobal(t *testing.T) {
+// TestThrottlingReadGlobal make sure that the pool level throttling override the reader level throttling
+func TestThrottlingReadGlobal(t *testing.T) {
 	// One byte a second
 	pool := NewIOThrottlerPool(1, 1)
 
@@ -299,8 +366,25 @@ func TestThrottlingGlobal(t *testing.T) {
 
 }
 
-// TestThrottlingLocal make sure that when we have plenty of bandwidth at the pool level, reader level throttling is effective
-func TestThrottlingLocal(t *testing.T) {
+// TestThrottlingWriteGlobal make sure that the pool level throttling override the writer level throttling
+func TestThrottlingWriteGlobal(t *testing.T) {
+	// One byte a second
+	pool := NewIOThrottlerPool(1, 1)
+
+	r, w := io.Pipe()
+	tw := pool.NewThrottledWriteCloser(w, 100000, 100000, "r")
+	assertNotNil(tw, t)
+	data := []byte("01234")
+	elapsedSeconds, err := timeTransfer(data, r, tw)
+	if elapsedSeconds != int64(len(data)-1) {
+		t.Fatalf("Expecting read to take %v seconds but it took %v instead", int64(len(data)-1), elapsedSeconds)
+	}
+	assertNil(err, t)
+
+}
+
+// TestThrottlingReadLocal make sure that when we have plenty of bandwidth at the pool level, reader level throttling is effective
+func TestThrottlingReadLocal(t *testing.T) {
 	pool := NewIOThrottlerPool(10000, 100000)
 	r, w := io.Pipe()
 	// One byte a second
@@ -314,8 +398,23 @@ func TestThrottlingLocal(t *testing.T) {
 	assertNil(err, t)
 }
 
-// TestFairness make sure that if we have a Reader with low throttling , another Reader with High throttling finish on time
-func TestFairness(t *testing.T) {
+// TestThrottlingWriteLocal make sure that when we have plenty of bandwidth at the pool level, writer level throttling is effective
+func TestThrottlingWriteLocal(t *testing.T) {
+	pool := NewIOThrottlerPool(10000, 100000)
+	r, w := io.Pipe()
+	// One byte a second
+	tw := pool.NewThrottledWriteCloser(w, 1, 1, "r")
+	assertNotNil(tw, t)
+	data := []byte("01234")
+	elapsedSeconds, err := timeTransfer(data, r, tw)
+	if elapsedSeconds != int64(len(data)-1) {
+		t.Fatalf("Expecting read to take %v seconds but it took %v instead", int64(len(data)-1), elapsedSeconds)
+	}
+	assertNil(err, t)
+}
+
+// TestReaderFairness make sure that if we have a Reader with low throttling , another Reader with High throttling finish on time
+func TestReaderFairness(t *testing.T) {
 
 	pool := NewIOThrottlerPool(100000, 1000000)
 
@@ -354,8 +453,48 @@ func TestFairness(t *testing.T) {
 	assertNil(err, t)
 }
 
-// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very small buffer
-func TestLoadTransferSlow(t *testing.T) {
+// TestWriterFairness make sure that if we have a Writer with low throttling , another Writer with High throttling finish on time
+func TestWriterFairness(t *testing.T) {
+
+	pool := NewIOThrottlerPool(100000, 1000000)
+
+	r, w := io.Pipe()
+	gr, gw := io.Pipe()
+	// One byte a second
+	tw := pool.NewThrottledWriteCloser(w, 1, 1, "r")
+	assertNotNil(tw, t)
+	tgw := pool.NewThrottledWriteCloser(gw, 100000, 100000, "gr")
+	assertNotNil(tgw, t)
+	// Hammer one pipe
+	go func() {
+		data := []byte("safsa341qfea")
+		for {
+			_, err := tgw.Write(data)
+			if nil != err {
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			buffer := make([]byte, 10)
+			_, err := gr.Read(buffer)
+			if nil != err {
+				return
+			}
+		}
+	}()
+	data := []byte("01234")
+	elapsedSeconds, err := timeTransfer(data, r, tw)
+	// the other pipe should still be able to complete in time
+	if elapsedSeconds != int64(len(data)-1) {
+		t.Fatalf("Expecting read to take %v seconds but it took %v instead", int64(len(data)-1), elapsedSeconds)
+	}
+	assertNil(err, t)
+}
+
+// TestReadLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very small buffer
+func TestReadLoadTransferSlow(t *testing.T) {
 	// One byte a second
 	pool := NewIOThrottlerPool(100000, 100000)
 	var wg sync.WaitGroup
@@ -379,8 +518,8 @@ func TestLoadTransferSlow(t *testing.T) {
 	wg.Wait()
 }
 
-// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very 1MB buffer
-func TestLoadTransferFast(t *testing.T) {
+// TestReadLoadTransferFast load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+func TestReadLoadTransferFast(t *testing.T) {
 	nbWorker := 30
 	pool := NewIOThrottlerPool(1024*1024, 1024*1024)
 	var wg sync.WaitGroup
@@ -405,9 +544,9 @@ func TestLoadTransferFast(t *testing.T) {
 	wg.Wait()
 }
 
-// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+// TestReadLoadTransferFastNoConstraintServer load the pool with multiple threads and validate the throttling operations using very 1MB buffer
 // but in this case the pool is not constrictive
-func TestLoadTransferFastNoConstraintServer(t *testing.T) {
+func TestReadLoadTransferFastNoConstraintServer(t *testing.T) {
 	nbWorker := 30
 	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
 	var wg sync.WaitGroup
@@ -433,9 +572,9 @@ func TestLoadTransferFastNoConstraintServer(t *testing.T) {
 	wg.Wait()
 }
 
-// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+// TestReadLoadTransferFastConstraintReader load the pool with multiple threads and validate the throttling operations using very 1MB buffer
 // but in this case the pool is not constrictive but the reader throttling is a 10th of the data size
-func TestLoadTransferFastConstraintReader(t *testing.T) {
+func TestReadLoadTransferFastConstraintReader(t *testing.T) {
 	nbWorker := 30
 	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
 	var wg sync.WaitGroup
@@ -461,7 +600,114 @@ func TestLoadTransferFastConstraintReader(t *testing.T) {
 	wg.Wait()
 }
 
-// Benchmark : benchmark the operations of the pool
+// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very small buffer
+func TestWriteLoadTransferSlow(t *testing.T) {
+	// One byte a second
+	pool := NewIOThrottlerPool(100000, 100000)
+	var wg sync.WaitGroup
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tw := pool.NewThrottledWriteCloser(w, 1, 1, fmt.Sprintf("%d", i))
+		assertNotNil(tw, t)
+		data := []byte("01234")
+		elapsedSeconds, err := timeTransfer(data, r, tw)
+		if elapsedSeconds != int64(len(data)-1) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", int64(len(data)-1), elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
+}
+
+// TestWriteLoadTransferFast load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+func TestWriteLoadTransferFast(t *testing.T) {
+	nbWorker := 30
+	pool := NewIOThrottlerPool(1024*1024, 1024*1024)
+	var wg sync.WaitGroup
+	data := make([]byte, 1024*1024)
+	rand.Read(data)
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tw := pool.NewThrottledWriteCloser(w, 1024*1024, 1024*1024, fmt.Sprintf("%d", i))
+		assertNotNil(tw, t)
+		elapsedSeconds, err := timeTransfer(data, r, tw)
+		if elapsedSeconds > int64(nbWorker) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", 30, elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < nbWorker; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
+}
+
+// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+// but in this case the pool is not constrictive
+func TestWriteLoadTransferFastNoConstraintServer(t *testing.T) {
+	nbWorker := 30
+	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
+	var wg sync.WaitGroup
+	data := make([]byte, 1024*1024)
+	rand.Read(data)
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tw := pool.NewThrottledWriteCloser(w, 1024*1024, 1024*1024, fmt.Sprintf("%d", i))
+		assertNotNil(tw, t)
+		elapsedSeconds, err := timeTransfer(data, r, tw)
+		// we should finish in a tenth as the top level has 10x bandwith
+		if elapsedSeconds > int64(nbWorker/10) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", nbWorker/10, elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < nbWorker; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
+}
+
+// TestWriteLoadTransferFastConstraintWriter load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+// but in this case the pool is not constrictive but the reader throttling is a 10th of the data size
+func TestWriteLoadTransferFastConstraintWriter(t *testing.T) {
+	nbWorker := 30
+	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
+	var wg sync.WaitGroup
+	data := make([]byte, 1024*1024)
+	rand.Read(data)
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tw := pool.NewThrottledWriteCloser(w, 1024*1024/10, 1024*1024/10, fmt.Sprintf("%d", i))
+		assertNotNil(tw, t)
+		elapsedSeconds, err := timeTransfer(data, r, tw)
+		// we have a lot of bandwidth per server but only a tenth per client, it should roughly take 10s to download
+		if elapsedSeconds > int64(nbWorker/3) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", nbWorker/3, elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < nbWorker; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
+}
+
+// Benchmark : benchmark the operations of the pool with reader
 func Benchmark(b *testing.B) {
 
 	copyToReaders := func(bytesToCopy int, readerCount int) {
