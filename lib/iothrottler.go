@@ -65,6 +65,7 @@ func (p *ioThrottlerPool) GetGlobalLimit() (r rate.Limit, b int) {
 	defer p.mu.Unlock()
 	return p.globalLimiter.Limit(), p.globalLimiter.Burst()
 }
+
 func (p *ioThrottlerPool) GetIDs() []string {
 	var ids []string
 	p.mu.Lock()

@@ -7,8 +7,10 @@ import (
 	"golang.org/x/time/rate"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -347,6 +349,107 @@ func TestFairness(t *testing.T) {
 		t.Fatalf("Expecting read to take %v seconds but it took %v instead", int64(len(data)-1), elapsedSeconds)
 	}
 	assertNil(err, t)
+}
+
+func TestLoadTransferSlow(t *testing.T) {
+	// One byte a second
+	pool := NewIOThrottlerPool(100000, 100000)
+	var wg sync.WaitGroup
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tr := pool.NewThrottledReadCloser(r, 1, 1, fmt.Sprintf("%d", i))
+		assertNotNil(tr, t)
+		data := []byte("01234")
+		elapsedSeconds, err := timeTransfer(data, tr, w)
+		if elapsedSeconds != int64(len(data)-1) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", int64(len(data)-1), elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
+}
+
+func TestLoadTransferFast(t *testing.T) {
+	nbWorker := 30
+	pool := NewIOThrottlerPool(1024*1024, 1024*1024)
+	var wg sync.WaitGroup
+	data := make([]byte, 1024*1024)
+	rand.Read(data)
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tr := pool.NewThrottledReadCloser(r, 1024*1024, 1024*1024, fmt.Sprintf("%d", i))
+		assertNotNil(tr, t)
+		elapsedSeconds, err := timeTransfer(data, tr, w)
+		if elapsedSeconds > int64(nbWorker) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", 30, elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < nbWorker; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
+}
+
+func TestLoadTransferFastNoConstraintServer(t *testing.T) {
+	nbWorker := 30
+	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
+	var wg sync.WaitGroup
+	data := make([]byte, 1024*1024)
+	rand.Read(data)
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tr := pool.NewThrottledReadCloser(r, 1024*1024, 1024*1024, fmt.Sprintf("%d", i))
+		assertNotNil(tr, t)
+		elapsedSeconds, err := timeTransfer(data, tr, w)
+		// we should finish in a tenth as the top level has 10x bandwith
+		if elapsedSeconds > int64(nbWorker/10) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", nbWorker/10, elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < nbWorker; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
+}
+
+func TestLoadTransferFastConstraintReader(t *testing.T) {
+	nbWorker := 30
+	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
+	var wg sync.WaitGroup
+	data := make([]byte, 1024*1024)
+	rand.Read(data)
+	transfer := func(wg *sync.WaitGroup, i int) {
+		defer wg.Done()
+		r, w := io.Pipe()
+		tr := pool.NewThrottledReadCloser(r, 1024*1024/10, 1024*1024/10, fmt.Sprintf("%d", i))
+		assertNotNil(tr, t)
+		elapsedSeconds, err := timeTransfer(data, tr, w)
+		// we have a lot of bandwidth per server but only a tenth per client, it should roughly take 10s to download
+		if elapsedSeconds > int64(nbWorker/3) {
+			t.Fatalf("Expecting read to take %v seconds but it took %v instead", nbWorker/3, elapsedSeconds)
+		}
+		assertNil(err, t)
+	}
+
+	for i := 0; i < nbWorker; i++ {
+		wg.Add(1)
+		go transfer(&wg, i)
+	}
+	wg.Wait()
 }
 
 func Benchmark(b *testing.B) {
