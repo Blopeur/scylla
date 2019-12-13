@@ -55,6 +55,7 @@ func createTcpPipe(t *testing.T) (net.Conn, net.Conn) {
 	return client, <-conn
 }
 
+// TestBasicOps test all the basic operations of the throttlerPool
 func TestBasicOps(t *testing.T) {
 	pool := NewIOThrottlerPool(defaultRate, defaultBurst)
 	assertNotNil(pool, t)
@@ -204,6 +205,7 @@ func TestBasicOps(t *testing.T) {
 	assertNotNil(err, t)
 }
 
+// TestBandwidthBasicOps test the reader throttling basic ops without stress test
 func TestBandwidthBasicOps(t *testing.T) {
 	pool, err := NewBandwidthThrottlerPool(1, defaultBurst)
 	assertNotNil(err, t)
@@ -244,7 +246,7 @@ func TestBandwidthBasicOps(t *testing.T) {
 }
 
 func elapsedSeconds(t time.Time) int64 {
-	return int64(time.Duration(time.Now().Sub(t)).Seconds())
+	return int64(time.Duration(time.Since(t)).Seconds())
 }
 
 func timeTransfer(data []byte, reader io.Reader, writer io.Writer) (int64, error) {
@@ -267,10 +269,10 @@ func timeTransfer(data []byte, reader io.Reader, writer io.Writer) (int64, error
 	elapsed := elapsedSeconds(timer)
 	var countError error = nil
 	if count != len(data) {
-		countError = errors.New(fmt.Sprintf("Expected to read %v but got %v", count, len(data)))
+		countError = fmt.Errorf("expected to read %v but got %v", count, len(data))
 	}
 
-	serr, _ := <-serverError
+	serr := <-serverError
 	var returnErr error = nil
 	if countError != nil {
 		returnErr = countError
@@ -282,6 +284,7 @@ func timeTransfer(data []byte, reader io.Reader, writer io.Writer) (int64, error
 	return elapsed, returnErr
 }
 
+// TestThrottlingGlobal make sure that the pool level throttling override the reader level throttling
 func TestThrottlingGlobal(t *testing.T) {
 	// One byte a second
 	pool := NewIOThrottlerPool(1, 1)
@@ -298,6 +301,7 @@ func TestThrottlingGlobal(t *testing.T) {
 
 }
 
+// TestThrottlingLocal make sure that when we have plenty of bandwidth at the pool level, reader level throttling is effective
 func TestThrottlingLocal(t *testing.T) {
 	pool := NewIOThrottlerPool(10000, 100000)
 	r, w := io.Pipe()
@@ -312,6 +316,7 @@ func TestThrottlingLocal(t *testing.T) {
 	assertNil(err, t)
 }
 
+// TestFairness make sure that if we have a Reader with low throttling , another Reader with High throttling finish on time
 func TestFairness(t *testing.T) {
 
 	pool := NewIOThrottlerPool(100000, 1000000)
@@ -351,6 +356,7 @@ func TestFairness(t *testing.T) {
 	assertNil(err, t)
 }
 
+// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very small buffer
 func TestLoadTransferSlow(t *testing.T) {
 	// One byte a second
 	pool := NewIOThrottlerPool(100000, 100000)
@@ -375,6 +381,7 @@ func TestLoadTransferSlow(t *testing.T) {
 	wg.Wait()
 }
 
+// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very 1MB buffer
 func TestLoadTransferFast(t *testing.T) {
 	nbWorker := 30
 	pool := NewIOThrottlerPool(1024*1024, 1024*1024)
@@ -400,6 +407,8 @@ func TestLoadTransferFast(t *testing.T) {
 	wg.Wait()
 }
 
+// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+// but in this case the pool is not constrictive
 func TestLoadTransferFastNoConstraintServer(t *testing.T) {
 	nbWorker := 30
 	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
@@ -426,6 +435,8 @@ func TestLoadTransferFastNoConstraintServer(t *testing.T) {
 	wg.Wait()
 }
 
+// TestLoadTransferSlow load the pool with multiple threads and validate the throttling operations using very 1MB buffer
+// but in this case the pool is not constrictive but the reader throttling is a 10th of the data size
 func TestLoadTransferFastConstraintReader(t *testing.T) {
 	nbWorker := 30
 	pool := NewIOThrottlerPool(10240*1024, 1024*1024)
@@ -452,6 +463,7 @@ func TestLoadTransferFastConstraintReader(t *testing.T) {
 	wg.Wait()
 }
 
+// Benchmark : benchmark the operations of the pool
 func Benchmark(b *testing.B) {
 
 	copyToReaders := func(bytesToCopy int, readerCount int) {
