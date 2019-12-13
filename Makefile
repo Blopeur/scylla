@@ -32,7 +32,8 @@ exec:
 
 ## clean: Clean build files. Runs `go clean` internally.
 clean:
-	@-rm $(GOBIN)/form3Accounts 2> /dev/null
+	@-rm $(GOBIN)/server 2> /dev/null
+	@-rm $(GOBIN)/client 2> /dev/null
 	@-$(MAKE) go-clean
 
 go-compile: go-get go-build
@@ -41,7 +42,7 @@ go-compile: go-get go-build
 go-build:
 	@echo "  >  Building binary..."
 	mkdir -p $(GOBIN)
-	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go build $(LDFLAGS) -o $(GOBIN)/form3Accounts $(GOFILES)
+	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go build $(LDFLAGS) -o $(GOBIN)/server $(GOFILES)
 
 ## go-get Get all the missing dependencies
 go-get:
@@ -59,7 +60,12 @@ go-clean:
 ## unit-tests run all go unit tests
 unit-tests:
 	@echo "  >  Running Unit tests"
-	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go test -v  ./client/accounts
+	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go test -v  ./...
+
+## bench run all go benchmarks
+bench:
+	@echo "  >  Running Benchmarks"
+	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go test -bench=. -benchtime=30s ./lib
 
 ## go-lint run golangci linters against codebase
 go-lint:
