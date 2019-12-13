@@ -111,29 +111,26 @@ func (p *ioThrottlerPool) NewThrottledReadCloser(reader io.ReadCloser, r rate.Li
 
 }
 
-func (p *ioThrottlerPool) globalThrottle(n int) error {
+func (p *ioThrottlerPool) globalThrottle(n int) (time.Duration, error) {
 	now := time.Now()
 	// This is suboptimal as we do not guarantee a fair allocation across all reader/writer
 	rvGlobal := p.globalLimiter.ReserveN(now, n)
 	if !rvGlobal.OK() {
-		return fmt.Errorf("exceeds limiter's burst")
+		return 0, fmt.Errorf("exceeds limiter's burst")
 	}
 	delay := rvGlobal.DelayFrom(now)
-	time.Sleep(delay)
-	return nil
+	return delay, nil
 }
 
-func (p *ioThrottlerPool) throttle(n int, l *ioThrottler) error {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+func (p *ioThrottlerPool) throttle(n int, l *ioThrottler) (time.Duration, error) {
+
 	now := time.Now()
 	rvLocal := l.limiter.ReserveN(now, n)
 	if !rvLocal.OK() {
-		return fmt.Errorf("exceeds limiter's burst")
+		return 0, fmt.Errorf("exceeds limiter's burst")
 	}
 	delay := rvLocal.DelayFrom(now)
-	time.Sleep(delay)
-	return nil
+	return delay, nil
 }
 
 func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
@@ -157,19 +154,24 @@ func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
 	if len(buf) <= b {
 		b = len(buf)
 	}
-	err := r.pool.globalThrottle(b)
+	globalDelay, err := r.pool.globalThrottle(b)
 	if err != nil {
 		r.pool.mu.Unlock()
 		return 0, err
 	}
 	r.pool.mu.Unlock()
-
-	err = r.pool.throttle(b, l)
+	r.pool.mu.RLock()
+	bufferDelay, err := r.pool.throttle(b, l)
 	if err != nil {
-		r.pool.mu.Unlock()
+		r.pool.mu.RUnlock()
 		return 0, err
 	}
-
+	r.pool.mu.RUnlock()
+	if globalDelay > bufferDelay {
+		time.Sleep(globalDelay)
+	} else {
+		time.Sleep(bufferDelay)
+	}
 	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
 	if b < len(buf) {
 		tmp := make([]byte, b)
