@@ -56,18 +56,6 @@ type IOThrottlerPool interface {
 	SetLimitForAll(r rate.Limit, b int)
 	NewThrottledReadCloser(reader io.ReadCloser, r rate.Limit, b int, id string) *ThrottledReadCloser
 	NewThrottledWriteCloser(writer io.WriteCloser, r rate.Limit, b int, id string) *ThrottledWriteCloser
-	NewBandwidthThrottledReadCloser(reader io.ReadCloser, bandwidth int64, b int, id string) (*ThrottledReadCloser, error)
-}
-
-// NewBandwidthThrottlerPool create a new pool using the bandwidth rather than rate.limit
-func NewBandwidthThrottlerPool(bandwidth int64, burstSize int) (IOThrottlerPool, error) {
-	if bandwidth < 1024 {
-		return nil, fmt.Errorf("bandwith needs to be at least 1KB")
-	}
-	if burstSize < 1024 {
-		return nil, fmt.Errorf("buffer needs to be at least 1KB")
-	}
-	return NewIOThrottlerPool(rate.Every(convertBandwidthToLimit(bandwidth)), burstSize), nil
 }
 
 // NewIOThrottlerPool create a new Reader Pool
@@ -78,15 +66,6 @@ func NewIOThrottlerPool(r rate.Limit, b int) IOThrottlerPool {
 		mu:            &sync.RWMutex{},
 	}
 	return i
-}
-
-func convertBandwidthToLimit(bandwidth int64) time.Duration {
-	b := bandwidth / 1024
-	if b == 0 {
-		b = 1
-	}
-	//we use 1KB block chunck instead of 1 B for calculating events as we use 1KB buffer
-	return time.Duration(1000000000 / b)
 }
 
 // GetGlobalLimit get the global limit for the pool
@@ -149,14 +128,6 @@ func (p *ioThrottlerPool) SetLimitByID(r rate.Limit, b int, id string) error {
 	return nil
 }
 
-// NewBandwidthThrottledReadCloser Return A reader where the limits where defined using bandwidth instead of rate.limit
-func (p *ioThrottlerPool) NewBandwidthThrottledReadCloser(reader io.ReadCloser, bandwidth int64, b int, id string) (*ThrottledReadCloser, error) {
-	if bandwidth < 1024 {
-		return nil, fmt.Errorf("bandwith needs to be at least 1KB")
-	}
-	return p.NewThrottledReadCloser(reader, rate.Every(convertBandwidthToLimit(bandwidth)), b, id), nil
-}
-
 // NewThrottledReadCloser return a new Throttled Reader
 func (p *ioThrottlerPool) NewThrottledReadCloser(reader io.ReadCloser, r rate.Limit, b int, id string) *ThrottledReadCloser {
 	p.mu.Lock()
@@ -173,14 +144,6 @@ func (p *ioThrottlerPool) NewThrottledReadCloser(reader io.ReadCloser, r rate.Li
 
 }
 
-// NewBandwidthThrottledReadCloser Return A reader where the limits where defined using bandwidth instead of rate.limit
-func (p *ioThrottlerPool) NewBandwidthThrottledWriteCloser(writer io.WriteCloser, bandwidth int64, b int, id string) (*ThrottledWriteCloser, error) {
-	if bandwidth < 1024 {
-		return nil, fmt.Errorf("bandwith needs to be at least 1KB")
-	}
-	return p.NewThrottledWriteCloser(writer, rate.Every(convertBandwidthToLimit(bandwidth)), b, id), nil
-}
-
 // NewThrottledReadCloser return a new Throttled Reader
 func (p *ioThrottlerPool) NewThrottledWriteCloser(writer io.WriteCloser, r rate.Limit, b int, id string) *ThrottledWriteCloser {
 	p.mu.Lock()
@@ -195,17 +158,6 @@ func (p *ioThrottlerPool) NewThrottledWriteCloser(writer io.WriteCloser, r rate.
 		pool:            p,
 	}
 
-}
-
-// NewBandwidthThrottledReadCloser Return A reader where the limits where defined using bandwidth instead of rate.limit
-func NewBandwidthThrottledReadWriteCloser(poolRead, poolWrite IOThrottlerPool, readwriter io.ReadWriteCloser,
-	bandwidthRead int64, burstRead int, bandwidthWrite int64, burstWrite int, id string) (io.WriteCloser, error) {
-	if bandwidthRead < 1024 || bandwidthWrite < 1024 {
-		return nil, fmt.Errorf("bandwith needs to be at least 1KB")
-	}
-	return NewThrottledReadWriteCloser(poolRead, poolWrite, readwriter,
-		rate.Every(convertBandwidthToLimit(bandwidthRead)), burstRead,
-		rate.Every(convertBandwidthToLimit(bandwidthWrite)), burstWrite, id), nil
 }
 
 // NewThrottledReadCloser return a new Throttled Reader

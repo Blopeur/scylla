@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	throttle "tcpThrottling/lib"
+	"time"
 )
 
 const (
@@ -25,44 +26,63 @@ type fileServer struct {
 // FileServer provide the basic fileserver interface
 type FileServer interface {
 	ListenAndServe()
-	SetGlobalLimit(r rate.Limit, b int)
-	SetConnectionLimit(r rate.Limit, b int, id string) error
-	SetConnectionsLimit(r rate.Limit, b int)
+	SetGlobalReadLimit(r rate.Limit, b int)
+	SetGlobalWriteLimit(r rate.Limit, b int)
+	SetConnectionReadLimit(r rate.Limit, b int, id string) error
+	SetConnectionWriteLimit(r rate.Limit, b int, id string) error
+	SetConnectionsReadLimit(r rate.Limit, b int)
+	SetConnectionsWriteLimit(r rate.Limit, b int)
 }
 
 //	SetGlobalLimit set the rate limiting and burst for the whole server
-func (f *fileServer) SetGlobalLimit(r rate.Limit, b int) {
-	f.pool.SetGlobalLimit(r, b)
+func (f *fileServer) SetGlobalReadLimit(r rate.Limit, b int) {
+	f.poolRead.SetGlobalLimit(r, b)
 }
 
 //	SetConnectionLimit set the rate limiting and burst for a specific connection
-func (f *fileServer) SetConnectionLimit(r rate.Limit, b int, id string) error {
-	return f.pool.SetLimitByID(r, b, id)
+func (f *fileServer) SetConnectionReadLimit(r rate.Limit, b int, id string) error {
+	return f.poolRead.SetLimitByID(r, b, id)
 }
 
 //	SetConnectionLimit set the rate limiting and burst for all connections
-func (f *fileServer) SetConnectionsLimit(r rate.Limit, b int) {
-	f.pool.SetLimitForAll(r, b)
+func (f *fileServer) SetConnectionsReadLimit(r rate.Limit, b int) {
+	f.poolRead.SetLimitForAll(r, b)
+}
+
+//	SetGlobalLimit set the rate limiting and burst for the whole server
+func (f *fileServer) SetGlobalWriteLimit(r rate.Limit, b int) {
+	f.poolWrite.SetGlobalLimit(r, b)
+}
+
+//	SetConnectionLimit set the rate limiting and burst for a specific connection
+func (f *fileServer) SetConnectionWriteLimit(r rate.Limit, b int, id string) error {
+	return f.poolWrite.SetLimitByID(r, b, id)
+}
+
+//	SetConnectionLimit set the rate limiting and burst for all connections
+func (f *fileServer) SetConnectionsWriteLimit(r rate.Limit, b int) {
+	f.poolWrite.SetLimitForAll(r, b)
 }
 
 // NewFileServer return a new file server
 func NewFileServer(address string, logPath string, bandwidthRead, bandwidthWrite int64) FileServer {
-	poolRead, err := throttle.NewBandwidthThrottlerPool(bandwidthRead, defaultBurst)
-	if err != nil {
-		log.Fatal("can't create dest file", err)
-		return nil
-	}
-	poolWrite, err := throttle.NewBandwidthThrottlerPool(bandwidthWrite, defaultBurst)
-	if err != nil {
-		log.Fatal("can't create dest file", err)
-		return nil
-	}
+	poolRead := throttle.NewIOThrottlerPool(rate.Every(convertBandwidthToLimit(bandwidthRead)), defaultBurst)
+	poolWrite := throttle.NewIOThrottlerPool(rate.Every(convertBandwidthToLimit(bandwidthWrite)), defaultBurst)
 	return &fileServer{
 		address:   address,
 		logPath:   logPath,
 		poolRead:  poolRead,
 		poolWrite: poolWrite,
 	}
+}
+
+func convertBandwidthToLimit(bandwidth int64) time.Duration {
+	b := bandwidth / 1024
+	if b == 0 {
+		b = 1
+	}
+	//we use 1KB block chunck instead of 1 B for calculating events as we use 1KB buffer
+	return time.Duration(1000000000 / b)
 }
 
 // handleConnection will simply take the connection and pipe the data to a file using the client address as file name
