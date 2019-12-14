@@ -104,6 +104,7 @@ func (p *ioThrottlerPool) SetGlobalLimit(r rate.Limit, b int) {
 	defer p.mu.Unlock()
 	p.globalLimiter.SetBurst(b)
 	p.globalLimiter.SetLimit(r)
+	p.updateBufferSize()
 }
 
 // SetLimitForAll set same limit for each reader in the pool
@@ -114,6 +115,7 @@ func (p *ioThrottlerPool) SetLimitForAll(r rate.Limit, b int) {
 		l.limiter.SetBurst(b)
 		l.limiter.SetLimit(r)
 	}
+	p.updateBufferSize()
 }
 
 // SetLimitForAll set a limit for a specific reader in the pool
@@ -126,6 +128,7 @@ func (p *ioThrottlerPool) SetLimitByID(r rate.Limit, b int, id string) error {
 	}
 	l.limiter.SetBurst(b)
 	l.limiter.SetLimit(r)
+	p.updateBufferSize()
 	return nil
 }
 
