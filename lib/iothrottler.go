@@ -206,6 +206,7 @@ func getBufferAndDelay(pool *ioThrottlerPool, id string) (int, time.Duration, er
 	if b == 0 {
 		b = 1
 	}
+	// we tried to find out the smallest buffer we need to use
 	if b > readerBurst {
 		b = readerBurst
 	}
@@ -217,6 +218,7 @@ func getBufferAndDelay(pool *ioThrottlerPool, id string) (int, time.Duration, er
 	if err != nil {
 		return 0, 0, err
 	}
+	// we pick the longest delay out of the two (as they overlap)
 	if globalDelay > bufferDelay {
 		return b, globalDelay, nil
 	}

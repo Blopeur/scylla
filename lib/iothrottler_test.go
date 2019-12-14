@@ -268,8 +268,9 @@ func elapsedSeconds(t time.Time) int64 {
 	return int64(time.Duration(time.Since(t)).Seconds())
 }
 
+// this is use to calculate the amount of time to transfer a buffer from writer to reader
+// It allows us to validate the performance and accuracy of the QoS system
 func timeTransfer(data []byte, reader io.Reader, writer io.Writer) (int64, error) {
-
 	serverError := make(chan error)
 	// Write the data
 	go func() {

@@ -76,6 +76,7 @@ func NewFileServer(address string, logPath string, bandwidthRead, bandwidthWrite
 	}
 }
 
+// convertBandwidthToLimit convert bandiwth in byte/s using 1k chunks block into a time.duration for the limiter
 func convertBandwidthToLimit(bandwidth int64) time.Duration {
 	b := bandwidth / 1024
 	if b == 0 {
