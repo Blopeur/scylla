@@ -192,46 +192,44 @@ func (p *ioThrottlerPool) throttle(n int, l *ioThrottler) (time.Duration, error)
 	return delay, nil
 }
 
-// Read , implement the Read function from the Reader interface
-func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
-	r.pool.mu.Lock()
-	globalBurst := r.pool.globalLimiter.Burst()
-	l, ok := r.pool.connections[r.id]
+func getBufferAndDelay(pool *ioThrottlerPool, id string) (int, time.Duration, error) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	globalBurst := pool.globalLimiter.Burst()
+	l, ok := pool.connections[id]
 	if !ok {
-		r.pool.mu.Unlock()
-		return 0, fmt.Errorf("limiter for connection %s not found", r.id)
+		return 0, 0, fmt.Errorf("limiter for connection %s not found", id)
 	}
 	readerBurst := l.limiter.Burst()
 	// we try to be fair as a result we split the number of token evenly by Reader
-	b := globalBurst / len(r.pool.connections)
+	b := globalBurst / len(pool.connections)
 	if b == 0 {
 		b = 1
 	}
 	if b > readerBurst {
 		b = readerBurst
 	}
-
-	if len(buf) <= b {
-		b = len(buf)
-	}
-	globalDelay, err := r.pool.globalThrottle(b)
+	globalDelay, err := pool.globalThrottle(b)
 	if err != nil {
-		r.pool.mu.Unlock()
-		return 0, err
+		return 0, 0, err
 	}
-	r.pool.mu.Unlock()
-	r.pool.mu.RLock()
-	bufferDelay, err := r.pool.throttle(b, l)
+	bufferDelay, err := pool.throttle(b, l)
 	if err != nil {
-		r.pool.mu.RUnlock()
-		return 0, err
+		return 0, 0, err
 	}
-	r.pool.mu.RUnlock()
 	if globalDelay > bufferDelay {
-		time.Sleep(globalDelay)
-	} else {
-		time.Sleep(bufferDelay)
+		return b, globalDelay, nil
 	}
+	return b, bufferDelay, nil
+}
+
+// Read , implement the Read function from the Reader interface
+func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
+	b, delay, err := getBufferAndDelay(r.pool, r.id)
+	if err != nil {
+		return 0, err
+	}
+	time.Sleep(delay)
 	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
 	if b < len(buf) {
 		tmp := make([]byte, b)
@@ -248,44 +246,11 @@ func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
 
 // Write , implement the Write function from the Write interface
 func (r *ThrottledWriteCloser) Write(buf []byte) (int, error) {
-	r.pool.mu.Lock()
-	globalBurst := r.pool.globalLimiter.Burst()
-	l, ok := r.pool.connections[r.id]
-	if !ok {
-		r.pool.mu.Unlock()
-		return 0, fmt.Errorf("limiter for connection %s not found", r.id)
-	}
-	readerBurst := l.limiter.Burst()
-	// we try to be fair as a result we split the number of token evenly by Reader
-	b := globalBurst / len(r.pool.connections)
-	if b == 0 {
-		b = 1
-	}
-	if b > readerBurst {
-		b = readerBurst
-	}
-
-	if len(buf) <= b {
-		b = len(buf)
-	}
-	globalDelay, err := r.pool.globalThrottle(b)
+	b, delay, err := getBufferAndDelay(r.pool, r.id)
 	if err != nil {
-		r.pool.mu.Unlock()
 		return 0, err
 	}
-	r.pool.mu.Unlock()
-	r.pool.mu.RLock()
-	bufferDelay, err := r.pool.throttle(b, l)
-	if err != nil {
-		r.pool.mu.RUnlock()
-		return 0, err
-	}
-	r.pool.mu.RUnlock()
-	if globalDelay > bufferDelay {
-		time.Sleep(globalDelay)
-	} else {
-		time.Sleep(bufferDelay)
-	}
+	time.Sleep(delay)
 	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
 	if b < len(buf) {
 		tmp := make([]byte, b)

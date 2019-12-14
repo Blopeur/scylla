@@ -65,7 +65,7 @@ unit-tests:
 ## bench run all go benchmarks
 bench:
 	@echo "  >  Running Benchmarks"
-	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go test -bench=. -benchtime=30s ./lib
+	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go test -bench=. -benchtime=60s -count=1 ./lib
 
 ## go-lint run golangci linters against codebase
 go-lint:
