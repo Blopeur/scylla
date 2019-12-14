@@ -132,6 +132,30 @@ func (p *ioThrottlerPool) SetLimitByID(r rate.Limit, b int, id string) error {
 	return nil
 }
 
+// Set limit for a reader
+func (t *ThrottledReadCloser) SetLimit(r rate.Limit, b int) error {
+	return t.pool.SetLimitByID(r, b, t.id)
+}
+
+// Set the limit for writer
+func (t *ThrottledWriteCloser) SetLimit(r rate.Limit, b int) error {
+	return t.pool.SetLimitByID(r, b, t.id)
+}
+
+// Set the throttle limit for a Throttled ReadWriter
+func (t *ThrottledReadWriteCloser) SetLimit(rRead, rWrite rate.Limit, bRead, bWrite int) error {
+	err := t.ThrottledReadCloser.SetLimit(rRead, bRead)
+	if err != nil {
+		return err
+	}
+	return t.ThrottledWriteCloser.SetLimit(rWrite, bWrite)
+}
+
+// Set the throttle limit for a Throttled Connection
+func (t *ThrottledConn) SetLimit(rRead, rWrite rate.Limit, bRead, bWrite int) error {
+	return t.ThrottledReadWriteCloser.SetLimit(rRead, rWrite, bRead, bWrite)
+}
+
 func (p *ioThrottlerPool) updateBufferSize() {
 	globalBurst := p.globalLimiter.Burst()
 	buffSize := globalBurst / (len(p.connections) + 1)
