@@ -11,6 +11,7 @@ import (
 
 type ioThrottler struct {
 	limiter *rate.Limiter
+	buf     []byte
 }
 
 type ioThrottlerPool struct {
@@ -128,6 +129,23 @@ func (p *ioThrottlerPool) SetLimitByID(r rate.Limit, b int, id string) error {
 	return nil
 }
 
+func (p *ioThrottlerPool) updateBufferSize() {
+	globalBurst := p.globalLimiter.Burst()
+	buffSize := globalBurst / (len(p.connections) + 1)
+	if buffSize == 0 {
+		buffSize = 1
+	}
+	for _, throttled := range p.connections {
+		// we try to find out the smallest buffer we need to use
+		if buffSize > throttled.limiter.Burst() {
+			buffSize = throttled.limiter.Burst()
+		}
+		if len(throttled.buf) != buffSize {
+			throttled.buf = make([]byte, buffSize)
+		}
+	}
+}
+
 // NewThrottledReadCloser return a new Throttled Reader
 func (p *ioThrottlerPool) NewThrottledReadCloser(reader io.ReadCloser, r rate.Limit, b int, id string) *ThrottledReadCloser {
 	p.mu.Lock()
@@ -136,6 +154,7 @@ func (p *ioThrottlerPool) NewThrottledReadCloser(reader io.ReadCloser, r rate.Li
 		limiter: rate.NewLimiter(r, b),
 	}
 	p.connections[id] = &throttler
+	p.updateBufferSize()
 	return &ThrottledReadCloser{
 		origReadCloser: reader,
 		id:             id,
@@ -152,6 +171,7 @@ func (p *ioThrottlerPool) NewThrottledWriteCloser(writer io.WriteCloser, r rate.
 		limiter: rate.NewLimiter(r, b),
 	}
 	p.connections[id] = &throttler
+	p.updateBufferSize()
 	return &ThrottledWriteCloser{
 		origWriteCloser: writer,
 		id:              id,
@@ -192,54 +212,46 @@ func (p *ioThrottlerPool) throttle(n int, l *ioThrottler) (time.Duration, error)
 	return delay, nil
 }
 
-func getBufferAndDelay(pool *ioThrottlerPool, id string) (int, time.Duration, error) {
+func getBufferAndDelay(pool *ioThrottlerPool, id string, buffLenght int) ([]byte, time.Duration, error) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
-	globalBurst := pool.globalLimiter.Burst()
 	l, ok := pool.connections[id]
 	if !ok {
-		return 0, 0, fmt.Errorf("limiter for connection %s not found", id)
+		return nil, 0, fmt.Errorf("limiter for connection %s not found", id)
 	}
-	readerBurst := l.limiter.Burst()
-	// we try to be fair as a result we split the number of token evenly by Reader
-	b := globalBurst / len(pool.connections)
-	if b == 0 {
-		b = 1
-	}
-	// we tried to find out the smallest buffer we need to use
-	if b > readerBurst {
-		b = readerBurst
+	b := len(l.buf)
+	if b > buffLenght {
+		b = buffLenght
 	}
 	globalDelay, err := pool.globalThrottle(b)
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, err
 	}
 	bufferDelay, err := pool.throttle(b, l)
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, err
 	}
 	// we pick the longest delay out of the two (as they overlap)
 	if globalDelay > bufferDelay {
-		return b, globalDelay, nil
+		return l.buf, globalDelay, nil
 	}
-	return b, bufferDelay, nil
+	return l.buf, bufferDelay, nil
 }
 
 // Read , implement the Read function from the Reader interface
 func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
-	b, delay, err := getBufferAndDelay(r.pool, r.id)
+	subBuff, delay, err := getBufferAndDelay(r.pool, r.id, len(buf))
 	if err != nil {
 		return 0, err
 	}
 	time.Sleep(delay)
 	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
-	if b < len(buf) {
-		tmp := make([]byte, b)
-		n, err := r.origReadCloser.Read(tmp)
+	if len(subBuff) < len(buf) {
+		n, err := r.origReadCloser.Read(subBuff)
 		if n <= 0 {
 			return n, err
 		}
-		copy(tmp[:n], buf)
+		copy(subBuff[:n], buf)
 		return n, err
 	}
 	n, err := r.origReadCloser.Read(buf)
@@ -248,16 +260,15 @@ func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
 
 // Write , implement the Write function from the Write interface
 func (r *ThrottledWriteCloser) Write(buf []byte) (int, error) {
-	b, delay, err := getBufferAndDelay(r.pool, r.id)
+	subBuff, delay, err := getBufferAndDelay(r.pool, r.id, len(buf))
 	if err != nil {
 		return 0, err
 	}
 	time.Sleep(delay)
 	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
-	if b < len(buf) {
-		tmp := make([]byte, b)
-		copy(buf[:b], tmp)
-		n, err := r.origWriteCloser.Write(tmp)
+	if len(subBuff) < len(buf) {
+		copy(buf[:len(subBuff)], subBuff)
+		n, err := r.origWriteCloser.Write(subBuff)
 		if n <= 0 {
 			return n, err
 		}
@@ -272,6 +283,7 @@ func (r *ThrottledReadCloser) Close() error {
 	r.pool.mu.Lock()
 	defer r.pool.mu.Unlock()
 	delete(r.pool.connections, r.id)
+	r.pool.updateBufferSize()
 	return r.origReadCloser.Close()
 }
 
@@ -280,6 +292,7 @@ func (r *ThrottledWriteCloser) Close() error {
 	r.pool.mu.Lock()
 	defer r.pool.mu.Unlock()
 	delete(r.pool.connections, r.id)
+	r.pool.updateBufferSize()
 	return r.origWriteCloser.Close()
 }
 
