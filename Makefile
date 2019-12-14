@@ -36,13 +36,13 @@ clean:
 	@-rm $(GOBIN)/client 2> /dev/null
 	@-$(MAKE) go-clean
 
-go-compile: go-get go-build
-
-## go-build : build the binary and put it in the build dir
-go-build:
-	@echo "  >  Building binary..."
-	mkdir -p $(GOBIN)
-	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go build $(LDFLAGS) -o $(GOBIN)/server $(GOFILES)
+# go-compile: go-get go-build
+#
+# ## go-build : build the binary and put it in the build dir
+# go-build:
+# 	@echo "  >  Building binary..."
+# 	mkdir -p $(GOBIN)
+# 	@GOPATH=$(GOPATH) GOBIN=$(GOBIN) go build $(LDFLAGS) -o $(GOBIN)/server $(GOFILES)
 
 ## go-get Get all the missing dependencies
 go-get:
