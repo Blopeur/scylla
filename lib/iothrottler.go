@@ -222,7 +222,7 @@ func (p *ioThrottlerPool) globalThrottle(n int) (time.Duration, error) {
 	// This is suboptimal as we do not guarantee a fair allocation across all reader/writer
 	rvGlobal := p.globalLimiter.ReserveN(now, n)
 	if !rvGlobal.OK() {
-		return 0, fmt.Errorf("exceeds limiter's burst")
+		return 0, fmt.Errorf("exceeds limiter's globalBurst")
 	}
 	delay := rvGlobal.DelayFrom(now)
 	return delay, nil

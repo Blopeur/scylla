@@ -20,7 +20,7 @@ func TestThrottledListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tl := NewThrottledListener(l, 1024, 1024, 1024)
+	tl := NewThrottledListener(l, 1024, 1024, 1024, 1024)
 	defer tl.Close()
 
 	go func() {
@@ -60,7 +60,7 @@ func BenchmarkNewThrottledListener(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		tl := NewThrottledListener(l, 1024*1024, 1024, 1024)
+		tl := NewThrottledListener(l, 1024*1024, 1024, 1024, 1024)
 		defer tl.Close()
 		for {
 			conn, err := tl.Accept()

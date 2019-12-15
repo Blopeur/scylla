@@ -11,26 +11,38 @@ type throttledListener struct {
 	poolWrite    IOThrottlerPool
 	globalLimit  int
 	connLimit    int
-	burst        int
+	globalBurst  int
+	connBurst    int
 }
 
-// GetBurstSize return the max burst amount of data transfer can occur (how many bytes can be read at once)
-// Careful buffer are pre allocated based on the burst size, stay conservative
-func (l *throttledListener) GetBurstSize() int {
-	return l.burst
+// GetGlobalBurstSize return the max globalBurst amount of data transfer can occur (how many bytes can be read at once)
+// Careful buffer are pre allocated based on the globalBurst size, stay conservative
+func (l *throttledListener) GetGlobalBurstSize() int {
+	return l.globalBurst
 }
 
-// SetBurstSize change the default burst size
-func (l *throttledListener) SetBurstSize(burst int) int {
-	l.burst = burst
-	// We need to update all settings for global / conn
+// SetGlobalBurstSize change the default globalBurst size
+func (l *throttledListener) SetGlobalBurstSize(burst int) int {
+	l.globalBurst = burst
+	lim := rate.Limit(l.globalLimit)
+	l.poolWrite.SetGlobalLimit(lim, l.globalBurst)
+	l.poolRead.SetGlobalLimit(lim, l.globalBurst)
+	return l.globalBurst
+}
+
+// GetConnBurstSize return the max connBurst amount of data transfer can occur (how many bytes can be read at once) per conn
+// Careful buffer are pre allocated based on the connBurst size, stay conservative
+func (l *throttledListener) GetConnBurstSize() int {
+	return l.connBurst
+}
+
+// SetConnBurstSize change the default connLimit size
+func (l *throttledListener) SetConnBurstSize(burst int) int {
+	l.connBurst = burst
 	lim := rate.Limit(l.connLimit)
-	l.poolRead.SetLimitForAll(lim, l.burst)
-	l.poolWrite.SetLimitForAll(lim, l.burst)
-	lim = rate.Limit(l.globalLimit)
-	l.poolWrite.SetGlobalLimit(lim, l.burst)
-	l.poolRead.SetGlobalLimit(lim, l.burst)
-	return l.burst
+	l.poolWrite.SetLimitForAll(lim, l.connBurst)
+	l.poolRead.SetLimitForAll(lim, l.connBurst)
+	return l.connBurst
 }
 
 // GetGlobalLimit return the current value of the limit for the server
@@ -48,8 +60,8 @@ func (l *throttledListener) GetConnLimit() int {
 func (l *throttledListener) SetConnLimit(limit int) int {
 	l.connLimit = limit
 	lim := rate.Limit(l.connLimit)
-	l.poolRead.SetLimitForAll(lim, l.burst)
-	l.poolWrite.SetLimitForAll(lim, l.burst)
+	l.poolRead.SetLimitForAll(lim, l.globalBurst)
+	l.poolWrite.SetLimitForAll(lim, l.globalBurst)
 	return limit
 }
 
@@ -58,8 +70,8 @@ func (l *throttledListener) SetConnLimit(limit int) int {
 func (l *throttledListener) SetGlobalLimit(limit int) int {
 	l.globalLimit = limit
 	lim := rate.Limit(l.globalLimit)
-	l.poolWrite.SetGlobalLimit(lim, l.burst)
-	l.poolRead.SetGlobalLimit(lim, l.burst)
+	l.poolWrite.SetGlobalLimit(lim, l.globalBurst)
+	l.poolRead.SetGlobalLimit(lim, l.globalBurst)
 	return l.globalLimit
 }
 
@@ -68,10 +80,12 @@ type ThrottledListener interface {
 	net.Listener
 	GetGlobalLimit() int
 	GetConnLimit() int
-	GetBurstSize() int
+	GetGlobalBurstSize() int
+	GetConnBurstSize() int
 	SetConnLimit(int) int
 	SetGlobalLimit(int) int
-	SetBurstSize(int) int
+	SetGlobalBurstSize(int) int
+	SetConnBurstSize(int) int
 }
 
 // Implement the Accept of net.Listener
@@ -82,7 +96,7 @@ func (l *throttledListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	throttledConn := NewThrottledThrottledConn(l.poolRead, l.poolWrite, conn,
-		rate.Limit(l.connLimit), l.burst, rate.Limit(l.connLimit), l.burst)
+		rate.Limit(l.connLimit), l.globalBurst, rate.Limit(l.connLimit), l.globalBurst)
 	return throttledConn, err
 }
 
@@ -97,14 +111,14 @@ func (l *throttledListener) Addr() net.Addr {
 }
 
 // NewThrottledListener return a ThrottledListener Interface that implement the net.Listener interface
-// Note: the burst size will limit how much you will be able to read from the con in a slot, this is to allow fair(ish) throttling between connection
-// Please size carefully your burst buffer.
+// Note: the globalBurst size will limit how much you will be able to read from the con in a slot, this is to allow fair(ish) throttling between connection
+// Please size carefully your globalBurst buffer.
 // Note2: the limit are in int, which limit you to max ~2 Gbyte / s
 // globalLimit and connLimit are both in Byte/s
-// NewThrottledListener will return nil if any of the limit / burst value are negative
-func NewThrottledListener(listener net.Listener, globalLimit, connLimit, burst int) ThrottledListener {
-	poolRead := NewIOThrottlerPool(rate.Limit(globalLimit), burst)
-	poolWrite := NewIOThrottlerPool(rate.Limit(globalLimit), burst)
+// NewThrottledListener will return nil if any of the limit / globalBurst value are negative
+func NewThrottledListener(listener net.Listener, globalLimit, connLimit, globalBurst, connBurst int) ThrottledListener {
+	poolRead := NewIOThrottlerPool(rate.Limit(globalLimit), globalBurst)
+	poolWrite := NewIOThrottlerPool(rate.Limit(globalLimit), globalBurst)
 	return &throttledListener{listener, poolRead, poolWrite,
-		globalLimit, connLimit, burst}
+		globalLimit, connLimit, globalBurst, connBurst}
 }
