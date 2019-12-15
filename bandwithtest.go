@@ -9,7 +9,7 @@ import (
 )
 
 func myLimitedListener(l net.Listener, limitGlobal, limitPerConn int) net.Listener {
-	limited := lib.NewThrottledListener(l, limitGlobal, limitPerConn, limitGlobal, limitPerConn)
+	limited := lib.NewThrottledListener(l, limitGlobal, limitPerConn, limitGlobal, limitPerConn/1024)
 	return limited
 }
 

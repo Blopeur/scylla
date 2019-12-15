@@ -11,7 +11,7 @@ import (
 
 type ioThrottler struct {
 	limiter *rate.Limiter
-	buf     []byte
+	buf     int
 }
 
 type ioThrottlerPool struct {
@@ -167,9 +167,7 @@ func (p *ioThrottlerPool) updateBufferSize() {
 		if buffSize > throttled.limiter.Burst() {
 			buffSize = throttled.limiter.Burst()
 		}
-		if len(throttled.buf) != buffSize {
-			throttled.buf = make([]byte, buffSize)
-		}
+		throttled.buf = buffSize
 	}
 }
 
@@ -239,24 +237,24 @@ func (p *ioThrottlerPool) throttle(n int, l *ioThrottler) (time.Duration, error)
 	return delay, nil
 }
 
-func getBufferAndDelay(pool *ioThrottlerPool, id string, buffLenght int) ([]byte, time.Duration, error) {
+func getBufferAndDelay(pool *ioThrottlerPool, id string, buffLenght int) (int, time.Duration, error) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	l, ok := pool.connections[id]
 	if !ok {
-		return nil, 0, fmt.Errorf("limiter for connection %s not found", id)
+		return 0, 0, fmt.Errorf("limiter for connection %s not found", id)
 	}
-	b := len(l.buf)
+	b := l.buf
 	if b > buffLenght {
 		b = buffLenght
 	}
 	globalDelay, err := pool.globalThrottle(b)
 	if err != nil {
-		return nil, 0, err
+		return 0, 0, err
 	}
 	bufferDelay, err := pool.throttle(b, l)
 	if err != nil {
-		return nil, 0, err
+		return 0, 0, err
 	}
 	// we pick the longest delay out of the two (as they overlap)
 	if globalDelay > bufferDelay {
@@ -272,16 +270,10 @@ func (r *ThrottledReadCloser) Read(buf []byte) (int, error) {
 		return 0, err
 	}
 	time.Sleep(delay)
-	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
-	if len(subBuff) < len(buf) {
-		n, err := r.origReadCloser.Read(subBuff)
-		if n <= 0 {
-			return n, err
-		}
-		copy(subBuff[:n], buf)
-		return n, err
+	if subBuff > len(buf) {
+		subBuff = len(buf)
 	}
-	n, err := r.origReadCloser.Read(buf)
+	n, err := r.origReadCloser.Read(buf[:subBuff])
 	return n, err
 }
 
@@ -292,16 +284,11 @@ func (r *ThrottledWriteCloser) Write(buf []byte) (int, error) {
 		return 0, err
 	}
 	time.Sleep(delay)
-	// if the amount of bytes allocated for read is smaller than the input buffer, we use a temp buffer for copy
-	if len(subBuff) < len(buf) {
-		copy(buf[:len(subBuff)], subBuff)
-		n, err := r.origWriteCloser.Write(subBuff)
-		if n <= 0 {
-			return n, err
-		}
-		return n, err
+	if subBuff > len(buf) {
+		subBuff = len(buf)
 	}
-	n, err := r.origWriteCloser.Write(buf)
+	n, err := r.origWriteCloser.Write(buf[:subBuff])
+
 	return n, err
 }
 

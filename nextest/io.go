@@ -75,10 +75,10 @@ func (c *expiringConn) duration() time.Duration {
 
 type clients []int64
 
-func (c clients) run(i int, ttl, rampUpDown time.Duration, mode byte, addr net.Addr) func() error {
+func (c clients) run(i int, ttl, rampUp, RampDown time.Duration, mode byte, addr net.Addr) func() error {
 	var fake io.ReadWriter = &expiringConn{ttl: ttl}
-	var rampDown io.ReadWriter = &expiringConn{ttl: rampUpDown}
-	var rampUp io.ReadWriter = &expiringConn{ttl: rampUpDown}
+	var up io.ReadWriter = &expiringConn{ttl: rampUp}
+	var down io.ReadWriter = &expiringConn{ttl: RampDown}
 
 	return func() error {
 		conn, err := net.DialTimeout(addr.Network(), addr.String(), 2*time.Second)
@@ -91,11 +91,12 @@ func (c clients) run(i int, ttl, rampUpDown time.Duration, mode byte, addr net.A
 			return err
 		}
 
+		// Ramp Up , to warm up prior to the actual measurement.
 		switch mode {
 		case 'r':
-			io.Copy(rampUp, conn)
+			io.Copy(up, conn)
 		case 'w':
-			io.Copy(conn, rampUp)
+			io.Copy(conn, up)
 		default:
 			return fmt.Errorf("unexpected control byte: %c", rune(mode))
 		}
@@ -109,11 +110,12 @@ func (c clients) run(i int, ttl, rampUpDown time.Duration, mode byte, addr net.A
 			return fmt.Errorf("unexpected control byte: %c", rune(mode))
 		}
 
+		// Ramp Down , this prevent side effect of connection leaving
 		switch mode {
 		case 'r':
-			io.Copy(rampDown, conn)
+			io.Copy(down, conn)
 		case 'w':
-			io.Copy(conn, rampDown)
+			io.Copy(conn, down)
 		default:
 			return fmt.Errorf("unexpected control byte: %c", rune(mode))
 		}

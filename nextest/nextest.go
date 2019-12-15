@@ -23,6 +23,8 @@ type LimitListenerTest struct {
 	LimitConn int
 	Count     int
 	Duration  time.Duration
+	RampUp    time.Duration
+	RampDown  time.Duration
 	Epsilon   float64
 	Mode      string
 }
@@ -32,7 +34,9 @@ func (t *LimitListenerTest) RegisterFlags(f *flag.FlagSet) {
 	flag.IntVar(&t.LimitConn, "limit-conn", 256*kb, "Limit per connection bandwidth (bytes per second)")
 	flag.IntVar(&t.Count, "count", 100, "Number of clients")
 	flag.DurationVar(&t.Duration, "time", 30*time.Second, "Test duration")
-	flag.Float64Var(&t.Epsilon, "epsilon", 0.05, "Tolerance")
+	flag.DurationVar(&t.RampUp, "rampup", 50*time.Millisecond, "Amount of time for ramping up the load")
+	flag.DurationVar(&t.RampDown, "rampdown", 50*time.Millisecond, "Amount of time spent for ramping down the load")
+	flag.Float64Var(&t.Epsilon, "epsilon", 0.04, "Tolerance")
 	flag.StringVar(&t.Mode, "mode", "read", "Test mode (either read or write)")
 }
 
@@ -69,6 +73,7 @@ func (t *LimitListenerTest) Run(limit LimitListenFunc) error {
 	log.Printf("clients: %d", t.Count)
 	log.Printf("global limit: %d [kB/s], per connection: %d [kB/s]", t.Limit/kb, t.LimitConn/kb)
 	log.Printf("transfer duration: %s", t.Duration)
+	log.Printf("Ramp ops duration - up %s - down %s ", t.RampUp, t.RampDown)
 	log.Printf("expected bandwidth within range (%d, %d) [B] (epsilon=%.2f)", rang[0], rang[1], t.Epsilon)
 	log.Print("running test ...")
 
@@ -86,7 +91,7 @@ func (t *LimitListenerTest) run(mode byte, addr net.Addr, rang [2]int) error {
 	var c = make(clients, t.Count)
 
 	for i := range c {
-		wg.Go(c.run(i, t.Duration, t.Duration, mode, addr))
+		wg.Go(c.run(i, t.Duration, t.RampUp, t.RampDown, mode, addr))
 	}
 
 	if err := wg.Wait(); err != nil {
